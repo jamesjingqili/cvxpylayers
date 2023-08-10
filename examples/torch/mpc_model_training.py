@@ -210,7 +210,7 @@ expert_policy = lambda x, acceleration_of_other_car: mpc_problem(x,
 
 
 # define the inferred parameters:
-inferred_parameters_torch = torch.tensor([0.5, 0.5, 2.0, 0.5, 1.0], requires_grad=True)
+inferred_parameters_torch = torch.tensor([1.0, 1.0, 1.0, 0.1, 1.0], requires_grad=True)
 
 # the training loop:
 training_epochs = 40 
