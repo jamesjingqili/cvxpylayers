@@ -6,10 +6,6 @@ from tqdm import tqdm
 
 
 
-# lessons learned:
-# 1. the problem should feasible, convex, for any given parameters
-# 2. Make sure the there is no product of two parameters that to be inferred
-
 
 
 # ----------------- 1. Define the MPC problem -----------------
@@ -35,12 +31,7 @@ B2_torch = torch.tensor(B2)
 
 
 # define the ground truth parameters of the cost function
-# parameters:   weight_on_distance_cost, 
-#               weight_on_velocity_cost, 
-#               weight_on_acceleration_cost, 
-#               desired_distance, 
-#               desired_velocity,
-ground_truth_parameters = torch.tensor([2.0, 4.0, 0.5, 0.5, 1.0])
+ground_truth_parameters = torch.tensor([2.0, 2.0, 3.0, 3.0])
 ground_truth_parameters_np = ground_truth_parameters.cpu().numpy()
 control_limit = 1.0 # this is the constraint on the control
 T = 5 # look-ahead horizon
@@ -58,35 +49,27 @@ def cost(xt, ut):
 
 
 # define MPC problem as below:
+# everything is in numpy
 def construct_mpc_problem():
-    # belows are the parameters of the MPC problem
-    x = cp.Parameter(n)
-    acceleration_of_other_car = cp.Parameter(1)
-    # belows are the decision variables of the MPC problem
-    states = [cp.Variable(n) for _ in range(T)]
-    controls = [cp.Variable(m) for _ in range(T)]
+    x = cp.Parameter(n) # this is the parameters of the problem
+    acceleration_of_other_car = cp.Parameter(1) # this is the parameters of the problem
+    states = [cp.Variable(n) for _ in range(T)] # this is the decision variables of MPC
+    controls = [cp.Variable(m) for _ in range(T)] # this is the decision variables of MPC
     # initial constraints
-    constraints = [states[0] == x, 
-        cp.norm(controls[0], 'inf') <= control_limit,
-        states[0][0] <= states[0][2] - ground_truth_parameters_np[3]] 
+    constraints = [states[0] == x, cp.norm(controls[0], 'inf') <= control_limit] 
     # initial objective
-    # 
-    objective = cp.multiply(ground_truth_parameters_np[0], cp.square(ground_truth_parameters_np[3]-(states[0][2]-states[0][0]))) +\
-        cp.multiply(ground_truth_parameters_np[1], cp.square(states[0][1] - ground_truth_parameters_np[4]))+\
-        cp.multiply(ground_truth_parameters_np[2], cp.square(controls[0])) 
+    objective = cp.sum(cp.multiply(ground_truth_parameters_np, cp.square(states[0]))) +\
+        cp.sum_squares(controls[0]) 
     for t in range(1, T):
         # objective
-        #
-        objective = cp.square(cp.multiply(ground_truth_parameters_np[0], ground_truth_parameters_np[3]-(states[t][2]-states[t][0]))) +\
-            cp.multiply(ground_truth_parameters_np[1], cp.square(states[t][1] - ground_truth_parameters_np[4]))+\
-            cp.multiply(ground_truth_parameters_np[2], cp.square(controls[t])) 
+        objective += cp.sum(cp.multiply(ground_truth_parameters_np, cp.square(states[t]))) +\
+            cp.sum_squares(controls[t]) 
         # dynamics constraints
         constraints += [states[t] == A @ states[t-1] +\
             B1 @ controls[t-1] +\
             B2 @ acceleration_of_other_car] 
         # control constraints
-        constraints += [cp.norm(controls[t], 'inf') <= control_limit]
-        constraints += [states[t][0] <= states[t][2]- ground_truth_parameters_np[3]] 
+        constraints += [cp.norm(controls[t], 'inf') <= control_limit] 
     problem = cp.Problem(cp.Minimize(objective), constraints)
     return CvxpyLayer(problem, variables=[controls[0]], parameters=[x, acceleration_of_other_car])
 
@@ -100,8 +83,9 @@ def simulate(policy, x0, acceleration_of_other_car, n_iters=1):
         ut = policy(xt, acceleration_of_other_car)[0] # current control
         # record control, cost, and next state:
         controls.append(ut)
+        costs.append(cost(xt, ut).item())
         states.append(dynamics_torch(xt, ut, acceleration_of_other_car))
-    return states[:-1], controls
+    return states[:-1], controls, costs
 
 
 # define the mean square error
@@ -121,37 +105,29 @@ def mse(prediction, actual):
 # define the differentiable MPC problem as below
 # The problem bellow is the same as the MPC problem except that the parameters are inferred
 def construct_differentiable_mpc_problem():
-    # belows are the parameters of the MPC problem
-    x = cp.Parameter(n)
-    inferred_parameters = cp.Parameter(5, nonneg=True) # this is the parameters of the problem
-    acceleration_of_other_car = cp.Parameter(1)
-    # belows are the decision variables of the MPC problem
-    states = [cp.Variable(n) for _ in range(T)]
-    controls = [cp.Variable(m) for _ in range(T)]
+    x = cp.Parameter(n) # this is the parameters of the problem
+    inferred_parameters = cp.Parameter(n, nonneg=True) # this is the parameters of the problem
+    acceleration_of_other_car = cp.Parameter(1) # this is the parameters of the problem
+    states = [cp.Variable(n) for _ in range(T)] # this is the decision variables of MPC
+    controls = [cp.Variable(m) for _ in range(T)] # this is the decision variables of MPC
     # initial constraints
-    constraints = [states[0] == x, 
-        cp.norm(controls[0], 'inf') <= control_limit,
-        states[0][0] <= states[0][2] - inferred_parameters[3]] 
-    # initial objective
-    # 
-    objective = cp.multiply(inferred_parameters[0], cp.square(ground_truth_parameters_np[3]-(states[0][2]-states[0][0]))) +\
-        cp.multiply(inferred_parameters[1], cp.square(states[0][1] - ground_truth_parameters_np[4]))+\
-        cp.multiply(inferred_parameters[2], cp.square(controls[0])) 
+    constraints = [states[0] == x, cp.norm(controls[0], 'inf') <= control_limit] 
+    # initial time state and control cost
+    objective = cp.sum(cp.multiply(inferred_parameters, cp.square(states[0]))) + \
+    cp.sum_squares(controls[0]) 
     for t in range(1, T):
-        # objective
-        #
-        objective = cp.square(cp.multiply(inferred_parameters[0], ground_truth_parameters_np[3]-(states[t][2]-states[t][0]))) +\
-            cp.multiply(inferred_parameters[1], cp.square(states[t][1] - ground_truth_parameters_np[4]))+\
-            cp.multiply(inferred_parameters[2], cp.square(controls[t])) 
+        # instantaneous state and control cost
+        objective += cp.sum(cp.multiply(inferred_parameters, cp.square(states[t]))) + \
+        cp.sum_squares(controls[t]) 
         # dynamics constraints
-        constraints += [states[t] == A @ states[t-1] +\
-            B1 @ controls[t-1] +\
-            B2 @ acceleration_of_other_car] 
+        constraints += [states[t] == A @ states[t-1] +  
+                        B1 @ controls[t-1] +  
+                        B2 @ acceleration_of_other_car] 
         # control constraints
-        constraints += [cp.norm(controls[t], 'inf') <= control_limit]
-        constraints += [states[t][0] <= states[t][2]- inferred_parameters[3]] 
+        constraints += [cp.norm(controls[t], 'inf') <= control_limit] 
     problem = cp.Problem(cp.Minimize(objective), constraints)
     return CvxpyLayer(problem, variables=[controls[0]], parameters=[x, acceleration_of_other_car, inferred_parameters])
+
 
 
 
@@ -161,7 +137,7 @@ def construct_differentiable_mpc_problem():
 
 
 # initial state of two cars
-x0 = torch.tensor([1.0, 0.2, 5.0, 1.0])
+x0 = torch.tensor([1., 1., 0., 0.])
 acceleration_of_other_car = torch.tensor([0.])
 
 
@@ -176,14 +152,11 @@ mpc_problem = construct_mpc_problem()
 mpc_problem(x0, acceleration_of_other_car)
 
 
-
-
-# generate expert state and control trajectories!
-expert_states, expert_controls= simulate(mpc_problem, 
-                                        x0, 
-                                        acceleration_of_other_car, 
-                                        n_iters = 100)
-
+# simulate the closed-loop system and get expert state and control trajectories, and costs
+expert_states, expert_controls, expert_costs = simulate(mpc_problem, 
+                                                        x0, 
+                                                        acceleration_of_other_car, 
+                                                        n_iters = 300)
 
 
 
@@ -210,23 +183,24 @@ expert_policy = lambda x, acceleration_of_other_car: mpc_problem(x,
 
 
 # define the inferred parameters:
-inferred_parameters_torch = torch.tensor([0.5, 0.5, 2.0, 0.5, 1.0], requires_grad=True)
+inferred_parameters_torch = torch.ones(n, requires_grad=True)
 
 # the training loop:
 training_epochs = 40 
 test_losses = [] 
 training_losses = [] 
-test_x0 = x0
+x0 = torch.tensor([1., 1., 0., 0.])
+test_x0 = torch.tensor([1., 1., 0., 0.])
 # initialize the training 
 with torch.no_grad():
-    _, initial_control_prediction = simulate(inferred_policy, test_x0, acceleration_of_other_car, n_iters = 100)
-    _, test_expert_control = simulate(expert_policy, test_x0, acceleration_of_other_car, n_iters = 100)
+    _, initial_control_prediction, _ = simulate(inferred_policy, test_x0, acceleration_of_other_car, n_iters = 100)
+    _, test_expert_control, _ = simulate(expert_policy, test_x0, acceleration_of_other_car, n_iters = 100)
     test_losses.append(mse(initial_control_prediction, test_expert_control))
     print(test_losses[-1])
 
 
 # use Adam optimizer
-opt = torch.optim.Adam([inferred_parameters_torch], lr=1e-4) 
+opt = torch.optim.Adam([inferred_parameters_torch], lr=1e-3) 
 
 
 # training begins!
@@ -243,7 +217,7 @@ for epoch in range(training_epochs):
         opt.step()
     with torch.no_grad():
         inferred_parameters_torch.data = inferred_parameters_torch.relu()
-        _, inferred_control_prediction = simulate(inferred_policy, 
+        _, inferred_control_prediction, _ = simulate(inferred_policy, 
                                                     test_x0, 
                                                     acceleration_of_other_car, 
                                                     n_iters = 100)
@@ -255,6 +229,3 @@ print('Training finished!')
 
 print('The inferred parameters are: ', inferred_parameters_torch.data)
 print('The ground truth parameters are: ', ground_truth_parameters.data)
-
-
-
