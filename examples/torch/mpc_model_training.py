@@ -270,6 +270,10 @@ with torch.no_grad():
     print(test_losses[-1])
 
 
+
+import matplotlib
+matplotlib.use('Qt5Agg')
+
 import matplotlib.pyplot as plt
 plt.plot([x[0].cpu() for x in predicted_trajectory], [x[1].cpu() for x in predicted_trajectory], label='inferred trajectory')
 plt.plot([x[0].cpu() for x in expert_trajectory], [x[1].cpu() for x in expert_trajectory], label='expert trajectory')
