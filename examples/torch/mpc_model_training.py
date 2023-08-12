@@ -40,7 +40,7 @@ B2_torch = torch.tensor(B2)
 #               weight_on_acceleration_cost, 
 #               desired_distance, 
 #               desired_velocity,
-ground_truth_parameters = torch.tensor([2.0, 4.0, 0.5, 0.5, 1.0])
+ground_truth_parameters = torch.tensor([4.0, 1.0, 0.5, 1.0])
 ground_truth_parameters_np = ground_truth_parameters.cpu().numpy()
 control_limit = 1.0 # this is the constraint on the control
 T = 5 # look-ahead horizon
@@ -68,25 +68,25 @@ def construct_mpc_problem():
     # initial constraints
     constraints = [states[0] == x, 
         cp.norm(controls[0], 'inf') <= control_limit,
-        states[0][0] <= states[0][2] - ground_truth_parameters_np[3]] 
+        states[0][0] <= states[0][2] - ground_truth_parameters_np[2]] 
     # initial objective
     # 
-    objective = cp.multiply(ground_truth_parameters_np[0], cp.square(ground_truth_parameters_np[3]-(states[0][2]-states[0][0]))) +\
-        cp.multiply(ground_truth_parameters_np[1], cp.square(states[0][1] - ground_truth_parameters_np[4]))+\
-        cp.multiply(ground_truth_parameters_np[2], cp.square(controls[0])) 
+    objective = cp.square(ground_truth_parameters_np[2]-(states[0][2]-states[0][0])) +\
+        cp.multiply(ground_truth_parameters_np[0], cp.square(states[0][1] - ground_truth_parameters_np[3]))+\
+        cp.multiply(ground_truth_parameters_np[1], cp.square(controls[0])) 
     for t in range(1, T):
         # objective
         #
-        objective = cp.square(cp.multiply(ground_truth_parameters_np[0], ground_truth_parameters_np[3]-(states[t][2]-states[t][0]))) +\
-            cp.multiply(ground_truth_parameters_np[1], cp.square(states[t][1] - ground_truth_parameters_np[4]))+\
-            cp.multiply(ground_truth_parameters_np[2], cp.square(controls[t])) 
+        objective = cp.square(ground_truth_parameters_np[2]-(states[t][2]-states[t][0])) +\
+            cp.multiply(ground_truth_parameters_np[0], cp.square(states[t][1] - ground_truth_parameters_np[3]))+\
+            cp.multiply(ground_truth_parameters_np[1], cp.square(controls[t])) 
         # dynamics constraints
         constraints += [states[t] == A @ states[t-1] +\
             B1 @ controls[t-1] +\
             B2 @ acceleration_of_other_car] 
         # control constraints
         constraints += [cp.norm(controls[t], 'inf') <= control_limit]
-        constraints += [states[t][0] <= states[t][2]- ground_truth_parameters_np[3]] 
+        constraints += [states[t][0] <= states[t][2]- ground_truth_parameters_np[2]] 
     problem = cp.Problem(cp.Minimize(objective), constraints)
     return CvxpyLayer(problem, variables=[controls[0]], parameters=[x, acceleration_of_other_car])
 
@@ -123,7 +123,7 @@ def mse(prediction, actual):
 def construct_differentiable_mpc_problem():
     # belows are the parameters of the MPC problem
     x = cp.Parameter(n)
-    inferred_parameters = cp.Parameter(5, nonneg=True) # this is the parameters of the problem
+    inferred_parameters = cp.Parameter(4, nonneg=True) # this is the parameters of the problem
     acceleration_of_other_car = cp.Parameter(1)
     # belows are the decision variables of the MPC problem
     states = [cp.Variable(n) for _ in range(T)]
@@ -131,25 +131,25 @@ def construct_differentiable_mpc_problem():
     # initial constraints
     constraints = [states[0] == x, 
         cp.norm(controls[0], 'inf') <= control_limit,
-        states[0][0] <= states[0][2] - inferred_parameters[3]] 
+        states[0][0] <= states[0][2] - inferred_parameters[2]] 
     # initial objective
     # 
-    objective = cp.multiply(inferred_parameters[0], cp.square(ground_truth_parameters_np[3]-(states[0][2]-states[0][0]))) +\
-        cp.multiply(inferred_parameters[1], cp.square(states[0][1] - ground_truth_parameters_np[4]))+\
-        cp.multiply(inferred_parameters[2], cp.square(controls[0])) 
+    objective = cp.square(inferred_parameters[2]-(states[0][2]-states[0][0])) +\
+        cp.multiply(inferred_parameters[0], cp.square(states[0][1] - ground_truth_parameters_np[3]))+\
+        cp.multiply(inferred_parameters[1], cp.square(controls[0])) 
     for t in range(1, T):
         # objective
         #
-        objective = cp.square(cp.multiply(inferred_parameters[0], ground_truth_parameters_np[3]-(states[t][2]-states[t][0]))) +\
-            cp.multiply(inferred_parameters[1], cp.square(states[t][1] - ground_truth_parameters_np[4]))+\
-            cp.multiply(inferred_parameters[2], cp.square(controls[t])) 
+        objective = cp.square(inferred_parameters[2]-(states[t][2]-states[t][0])) +\
+            cp.multiply(inferred_parameters[0], cp.square(states[t][1] - ground_truth_parameters_np[3]))+\
+            cp.multiply(inferred_parameters[1], cp.square(controls[t])) 
         # dynamics constraints
         constraints += [states[t] == A @ states[t-1] +\
             B1 @ controls[t-1] +\
             B2 @ acceleration_of_other_car] 
         # control constraints
         constraints += [cp.norm(controls[t], 'inf') <= control_limit]
-        constraints += [states[t][0] <= states[t][2]- inferred_parameters[3]] 
+        constraints += [states[t][0] <= states[t][2]- inferred_parameters[2]] 
     problem = cp.Problem(cp.Minimize(objective), constraints)
     return CvxpyLayer(problem, variables=[controls[0]], parameters=[x, acceleration_of_other_car, inferred_parameters])
 
@@ -210,7 +210,7 @@ expert_policy = lambda x, acceleration_of_other_car: mpc_problem(x,
 
 
 # define the inferred parameters:
-inferred_parameters_torch = torch.tensor([1.0, 1.0, 1.0, 0.1, 1.0], requires_grad=True)
+inferred_parameters_torch = torch.tensor([4.0, 1.0, 0.5, 1.0], requires_grad=True)
 
 # the training loop:
 training_epochs = 40 
@@ -256,5 +256,23 @@ print('Training finished!')
 print('The inferred parameters are: ', inferred_parameters_torch.data)
 print('The ground truth parameters are: ', ground_truth_parameters.data)
 
+
+
+
+
+
+predicted_trajectory, predicted_control = [], []
+expert_trajectory, expert_control = [], []
+with torch.no_grad():
+    predicted_trajectory, predicted_control = simulate(inferred_policy, test_x0, acceleration_of_other_car, n_iters = 100)
+    expert_trajectory, expert_control = simulate(expert_policy, test_x0, acceleration_of_other_car, n_iters = 100)
+    test_losses.append(mse(initial_control_prediction, test_expert_control))
+    print(test_losses[-1])
+
+
+import matplotlib.pyplot as plt
+plt.plot([x[0].cpu() for x in predicted_trajectory], [x[1].cpu() for x in predicted_trajectory], label='inferred trajectory')
+plt.plot([x[0].cpu() for x in expert_trajectory], [x[1].cpu() for x in expert_trajectory], label='expert trajectory')
+plt.legend()
 
 
